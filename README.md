@@ -62,6 +62,8 @@ Copy the whole folder under `dist/comfy_node_isolation_test` into `ComfyUI/custo
 
 In the UI, look for **Color Grade (MyNode)** and **Sharpness (MyNode)**. A minimal chain: Load Image → those two → Preview Image.
 
+![ComfyUI workflow: Load Image, Color Grade (MyNode), Sharpness (MyNode), Preview Image](image.png)
+
 ## How the build works
 
 `build_scripts/build.py` installs `my_node/requirements.txt` with `pip --target`, copies the resolved import packages into `_vendor`, rewrites imports in a staged copy of `nodes.py`, then runs Nuitka with `--module`. Example rewrite:
