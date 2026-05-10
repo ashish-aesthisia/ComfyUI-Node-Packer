@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build and generated artifacts
+build/
+dist/
+*.build/
+*.dist/
+*.onefile-build/
+
+# Nuitka outputs
+*.so
+*.pyd
+*.dll
+*.dylib
+*.pyi
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/
+
+# Local test output
+output/
+logs/
+
+# Tooling / CI artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/

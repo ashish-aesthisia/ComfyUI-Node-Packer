@@ -1,0 +1,3 @@
+Pillow==12.2.0
+humanize
+python-slugify
