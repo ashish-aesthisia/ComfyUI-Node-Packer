@@ -33,8 +33,8 @@ dist/<package_name>/
 ## Setup
 
 ```bash
-git clone https://github.com/your-org/comfy-node-isolation
-cd comfy-node-isolation
+git clone https://github.com/ashish-aesthisia/ComfyUI-Node-Packer
+cd ComfyUI-Node-Packer
 ```
 
 That's it. No venv, no `pip install` needed. On the first run `pack.py` detects that nuitka is missing, creates a `.tool_env/` venv next to itself, installs nuitka into it, and uses that Python for all subsequent steps. The `.tool_env/` is reused on every future run.
