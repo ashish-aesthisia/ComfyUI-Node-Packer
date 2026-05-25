@@ -1,113 +1,113 @@
-# ComfyUI isolated custom node (POC)
+# ComfyUI Node Packer
 
-ComfyUI loads every custom node in one Python process. If each node installs into the same environment with `pip install -r requirements.txt`, versions clash and are painful to unwind.
+ComfyUI loads every custom node in one Python process. When multiple nodes each run `pip install -r requirements.txt` into the shared environment, version conflicts are painful to debug.
 
-This repo builds a normal custom-node folder: Nuitka-compiled node code plus dependencies copied under a private `_vendor` tree, so imports like `PIL` resolve to `comfy_node_isolation_test._vendor.PIL` instead of whatever the host has installed.
+This tool solves that by building a self-contained ComfyUI-loadable package folder: the node's Python source is compiled with Nuitka into a `.so`/`.pyd` extension, and all its pip dependencies are copied under a private `_vendor` tree — completely isolated from whatever the host has installed.
 
-It is not one monolithic binary. Native packages (for example Pillow) ship as directories with their extension sidecars; Nuitka still compiles your node module.
+## How it works
 
-## Output
+`pack.py` takes any custom node directory and:
+
+1. **Installs** `requirements.txt` into an isolated build folder via `pip --target`
+2. **Auto-discovers** every top-level package that landed there (no manual mapping needed)
+3. **Rewrites imports** in the node source using the Python AST — `from PIL import Image` becomes `from my_node._vendor.PIL import Image`
+4. **Compiles** the rewritten source with Nuitka (`--module`)
+5. **Assembles** `dist/<package_name>/` ready for `ComfyUI/custom_nodes/`
+
+Heavy packages (`torch`, `numpy`, CUDA) are never vendored — those stay on the host.
+
+## Output structure
 
 ```text
-dist/comfy_node_isolation_test/
+dist/<package_name>/
   __init__.py
-  nodes.cpython-3xx-<platform>.so   # or .pyd on Windows
+  nodes.cpython-3xx-<platform>.so   # compiled node module
   _vendor/
     __init__.py
-    PIL/
+    PIL/           # vendored Pillow
     humanize/
     slugify/
+    ...            # all transitive deps are vendored automatically
 ```
-
-Leave the heavy stack to ComfyUI: `torch`, `numpy`, CUDA, and ComfyUI itself are not vendored here.
 
 ## Setup
 
-From the repo root:
+```bash
+git clone https://github.com/your-org/comfy-node-isolation
+cd comfy-node-isolation
+```
+
+That's it. No venv, no `pip install` needed. On the first run `pack.py` detects that nuitka is missing, creates a `.tool_env/` venv next to itself, installs nuitka into it, and uses that Python for all subsequent steps. The `.tool_env/` is reused on every future run.
+
+The node's own dependencies (`torch`, `numpy`, Pillow, etc.) are also installed automatically — into an isolated build folder, never into your system or any shared environment.
+
+Platform extras (these can't be auto-installed):
+- **Linux**: `apt install patchelf`
+- **macOS**: `brew install ccache` *(optional, speeds up rebuilds)*
+- **Windows**: Visual Studio Build Tools (required by Nuitka)
+
+## Usage
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install nuitka torch numpy
-pip install -r my_node/requirements.txt
+# Pack any custom node directory
+python pack.py <path/to/your_node>
+
+# Examples
+python pack.py my_node                              # example node bundled in this repo
+python pack.py ~/ComfyUI/custom_nodes/my_cool_node # any node on disk
+
+# Override the output package name (useful if the dir name is not a valid Python identifier)
+python pack.py my_node --name my_cool_node_v2
+
+# Choose a different output root
+python pack.py my_node --output /tmp/dist
+
+# Vendor deps but skip Nuitka (useful for testing the vendoring step alone)
+python pack.py my_node --skip-compile
 ```
 
-The second line is required for `python test_runner/test_node.py --source`, because `my_node/nodes.py` imports Pillow and the other libraries the same way ComfyUI would before you ship the built package. The Nuitka output vendors those under `_vendor`, so end users of the **built** folder do not install `my_node/requirements.txt` into ComfyUI.
-
-- Linux: install `patchelf` before building.
-- Windows: Visual Studio Build Tools for Nuitka.
-
-`my_node/requirements.txt` currently looks like:
-
-```text
-Pillow==12.2.0
-humanize
-python-slugify
-```
-
-## Build and test
+The packed folder lands in `dist/<package_name>/`. Copy it into ComfyUI:
 
 ```bash
-python test_runner/test_node.py --source
-python build_scripts/build.py
-python test_runner/test_node.py --binary
-python test_runner/verify_isolation.py
+cp -R dist/my_node  /path/to/ComfyUI/custom_nodes/
 ```
 
-`verify_isolation.py` checks that loading the built node does not replace the process-wide `PIL` module.
+## Node requirements
 
-## Try it in ComfyUI
+Your custom node directory must contain:
 
-Copy the whole folder under `dist/comfy_node_isolation_test` into `ComfyUI/custom_nodes/` (not only the `.so` / `.pyd`). Then start ComfyUI as you usually do.
+| File | Purpose |
+|------|---------|
+| `requirements.txt` | pip packages to isolate |
+| `nodes.py` | main module — compiled by Nuitka |
+| `__init__.py` | ComfyUI registration (`NODE_CLASS_MAPPINGS` etc.) — copied as-is |
 
-In the UI, look for **Color Grade (MyNode)** and **Sharpness (MyNode)**. A minimal chain: Load Image → those two → Preview Image.
+`__init__.py` typically just re-exports from `.nodes` and defines `NODE_CLASS_MAPPINGS`, so it works unchanged with the compiled extension.
 
-![ComfyUI workflow: Load Image, Color Grade (MyNode), Sharpness (MyNode), Preview Image](image.png)
-
-## How the build works
-
-`build_scripts/build.py` installs `my_node/requirements.txt` with `pip --target`, copies the resolved import packages into `_vendor`, rewrites imports in a staged copy of `nodes.py`, then runs Nuitka with `--module`. Example rewrite:
-
-```python
-from PIL import Image, ImageFilter, ImageEnhance
-```
-
-becomes:
-
-```python
-from comfy_node_isolation_test._vendor.PIL import Image, ImageFilter, ImageEnhance
-```
+If your main file isn't named `nodes.py`, the packer will use the only other `.py` file in the directory (if there is exactly one).
 
 ## Adding new dependencies
 
-1. Add the pip requirement to `my_node/requirements.txt` (pin versions if you care about reproducibility).
+Just add the package to `requirements.txt` — no other configuration needed. The packer auto-discovers every package installed by pip, including transitive dependencies, and vendors all of them.
 
-2. In `build_scripts/build.py`, if the **import name** is not the pip name with hyphens turned into underscores, extend `IMPORT_NAME_OVERRIDES`. Examples already there: `Pillow` → `PIL`, `python-slugify` → `slugify`.
+Previously, you would have had to maintain manual `IMPORT_NAME_OVERRIDES` and `IMPORT_REWRITES` dicts. Those are gone.
 
-3. Still in `build.py`, add entries to `IMPORT_REWRITES`: one exact string for each import line (or pattern) in `my_node/nodes.py` that must point at `_vendor`. The build does literal string replacement, so the key must match your source text.
+## What is not vendored
 
-4. In `my_node/nodes.py`, use normal third-party imports (the readable form). Rebuild and run the tests.
+Keep these on the host — the packer skips them automatically:
 
-If something imports at runtime but was never listed as a top-level package to copy, you may need to vendor a transitive dependency too (see limits below).
+```
+torch  numpy  torchvision  torchaudio  comfyui  folder_paths
+```
 
 ## Limits
 
-- Import rewriting is string-based; a real tool would use an AST or import hooks.
-- Only packages derived from `requirements.txt` plus `IMPORT_NAME_OVERRIDES` are copied. Transitive imports (for example `text_unidecode` for slugify) may need to be added explicitly until vendoring follows installed metadata.
-- Native wheels must be copied whole; validate on the OS and Python version you ship for.
-- The compiled extension matches your build machine’s Python, OS, and CPU; rebuild for the ComfyUI runtime you target.
+- `ast.unparse()` is used for import rewriting, which normalises whitespace and strips comments from the staged source. The compiled output is unaffected; comments appear only in the intermediate file fed to Nuitka.
+- The compiled extension is tied to your build machine's Python version, OS, and CPU architecture. Rebuild for each target runtime.
+- Native wheels (e.g. Pillow) must be copied whole and validated against the target OS and Python version.
 
-## Do not vendor these in the node package
+## Example node (`my_node/`)
 
-Keep these on the host unless you have a very specific reason not to:
+`my_node/` is a minimal ComfyUI node bundled as a usage example. It exposes two nodes — **Color Grade** and **Sharpness** — that depend on Pillow, humanize, and python-slugify, all of which get vendored automatically.
 
-```text
-torch
-numpy
-torchvision
-torchaudio
-ComfyUI modules
-CUDA / runtime libraries
-```
-
-The idea is small, node-specific libraries under `_vendor`, and ComfyUI owns the GPU and core stack.
+![ComfyUI workflow: Load Image → Color Grade → Sharpness → Preview Image](image.png)
